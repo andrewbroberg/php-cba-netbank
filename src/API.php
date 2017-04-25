@@ -29,8 +29,7 @@ class API
             'timeout' => 60,
             'cookies' => true,
             'headers' => [
-                'User-Agent' => "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/41.0.2227.1 Safari/537.36"
-            ]
+                'User-Agent' => "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/41.0.2227.1 Safari/537.36"            ]
         ));
 
         $this->client->setClient($this->guzzleClient);
@@ -75,12 +74,15 @@ class API
 
             $bal = $balance->count() ? $balance->text() : 0;
             $avl = $available->count() ? $available->text() : 0;
+            $bsb = $this->processNumbersOnly($bsb->count() ? $bsb->text() : '');
+            $accountNumber = $this->processNumbersOnly($accountNumber->count() ? $accountNumber->text() : '');
+            $fullAccountNumber = $bsb . $accountNumber;
 
-            $accountList[] = [
+            $accountList[$fullAccountNumber] = [
                 'nickname' => $name->text(),
                 'url' => $name->attr('href'),
-                'bsb' => $bsb->count() ? $bsb->text() : '',
-                'accountNum' => $accountNumber->count() ? $accountNumber->text() : '',
+                'bsb' => $bsb,
+                'accountNum' => $accountNumber,
                 'balance' => $this->processCurrency($bal),
                 'available' => $this->processCurrency($avl)
             ];
@@ -95,8 +97,7 @@ class API
 
     public function getTransactions($account, $from, $to)
     {
-        $link = sprintf("%s%s", self::BASE_URL, $account['url']);
-        $crawler = $this->client->request('GET', $link);
+        $crawler = $this->getAccountPage($account);
 
         $form = $crawler->filter('#aspnetForm');
 
@@ -108,6 +109,9 @@ class API
         $form = $form->form();
 
         $field = $this->createField('input', '__EVENTTARGET', 'ctl00$BodyPlaceHolder$lbSearch');
+        $form->set($field);
+
+        $field = $this->createField('input', '__EVENTARGUMENT', '');
         $form->set($field);
 
         $field = $this->createField('input', 'ctl00$ctl00', 'ctl00$BodyPlaceHolder$updatePanelSearch|ctl00$BodyPlaceHolder$lbSearch');
@@ -132,53 +136,18 @@ class API
         $form->set($field);
 
         $crawler = $this->client->submit($form);
-        $html = $crawler->html();
 
-        $pattern = '
-        /
-        \{              # { character
-            (?:         # non-capturing group
-                [^{}]   # anything that is not a { or }
-                |       # OR
-                (?R)    # recurses the entire pattern
-            )*          # previous group zero or more times
-        \}              # } character
-        /x
-        ';
-
-        $extracted = preg_match_all($pattern, $html, $matches);
-
-        $transactions = [];
-        foreach ($matches[0] as $_temp) {
-            if (strstr($_temp, '{"Transactions"')) {
-                $transactions = json_decode($_temp);
-                break;
-            }
-        }
-
-        $transactionList = [];
-        if (!empty($transactions->Transactions)) {
-            foreach ($transactions->Transactions as $transaction) {
-                $date = \DateTime::createFromFormat('YmdHisu', substr($transaction->Date->Sort[1], 0, 20), new \DateTimeZone('UTC'));
-                $date->setTimeZone(new \DateTimeZone($this->timezone));
-                $transactionList[] = [
-                    'timestamp' => $transaction->Date->Sort[1],
-                    'date' => $date->format('Y-m-d H:i:s.u'),
-                    'description' => $transaction->Description->Text,
-                    'amount' => $this->processCurrency($transaction->Amount->Text),
-                    'balance' => $this->processCurrency($transaction->Balance->Text),
-                    'trancode' => $transaction->TranCode->Text,
-                    'receiptnumber' => $transaction->ReceiptNumber->Text,
-                ];
-            }
-        }
-
-        return $transactionList;
+        return $this->filterTransactions($crawler);
     }
 
     public function setTimezone($timezone)
     {
         $this->timezone = $timezone;
+    }
+
+    private function processNumbersOnly($value)
+    {
+        return preg_replace('$[^0-9]$', '', $value);
     }
 
     private function processCurrency($amount)
@@ -201,5 +170,56 @@ class API
         $formfield = new InputFormField($ff);
 
         return $formfield;
+    }
+
+    public function filterTransactions($crawler)
+    {
+        $pattern = '
+        /
+        \{              # { character
+            (?:         # non-capturing group
+                [^{}]   # anything that is not a { or }
+                |       # OR
+                (?R)    # recurses the entire pattern
+            )*          # previous group zero or more times
+        \}              # } character
+        /x
+        ';
+        $html = $crawler->html();
+
+        preg_match_all($pattern, $html, $matches);
+
+        foreach ($matches[0] as $_temp) {
+            if (strstr($_temp, '{"Transactions"')) {
+                $transactions = json_decode($_temp);
+                break;
+            }
+        }
+
+        $transactionList = [];
+        if (!empty($transactions->Transactions)) {
+            foreach ($transactions->Transactions as $transaction) {
+                $date = \DateTime::createFromFormat('YmdHisu', substr($transaction->Date->Sort[1], 0, 20), new \DateTimeZone('UTC'));
+                $date->setTimeZone(new \DateTimeZone($this->timezone));
+                $transactionList[] = [
+                    'timestamp' => $transaction->Date->Sort[1],
+                    'date' => $date->format('Y-m-d H:i:s.u'),
+                    'description' => $transaction->Description->Text,
+                    'amount' => $this->processCurrency($transaction->Amount->Text),
+                    'balance' => $this->processCurrency($transaction->Balance->Text),
+                    'trancode' => $transaction->TranCode->Text,
+                    'receiptnumber' => $transaction->ReceiptNumber->Text,
+                ];
+            }
+
+        }
+
+        return $transactionList;
+    }
+
+    private function getAccountPage($account)
+    {
+        $link = sprintf("%s%s", self::BASE_URL, $account['url']);
+        return $this->client->request('GET', $link);
     }
 }
