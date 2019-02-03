@@ -17,7 +17,10 @@ $api = new Kravock\Netbank\API();
 
 $accounts = $api->login('CLIENT_NUMBER', 'PASSWORD');
 
-$accounts = $api->getTransactions($accounts[0], '12/04/2017', '22/04/2017');
+foreach ($accounts as $bsbNumber => $account) {
+    $transactions = $api->getTransactions($accounts[0], '12/04/2017', '22/04/2017');
+}
+
 ```
 
 ## Change log
